@@ -3,7 +3,7 @@
 <head>
     <title>WSJFBoard</title>
 
-    <script type="text/javascript" src="/apps/2.1/sdk.js"></script>
+    <script type="text/javascript" src="/apps/2.1/sdk-debug.js"></script>
 
     <script type="text/javascript">
         Rally.onReady(function () {
@@ -136,6 +136,17 @@ Ext.define('CustomApp', {
     onTimeboxScopeChange: function(newTimeboxScope) {
         this.callParent(arguments);
         this._startApp(this);
+    },
+
+    config: {
+        defaultSettings: {
+            usePrelim: true,
+            useWSJFOverLoad: false,
+            useWSJFReadOnly: true,
+            useProjectField: false,
+            useStateField: false,
+            showFilter: false
+        }
     },
 
     getSettingsFields: function() {
@@ -340,8 +351,8 @@ Ext.define('CustomApp', {
         //Now get the settings query box and apply those settings
         var queryString = app.getSetting('query');
         if (queryString) {
-            Ext.getCmp('MakeItSo').hide(); //Don't allow committing if subselected
-            Ext.getCmp('globalCheck').hide();
+            if ( Ext.getCmp('MakeItSo')) Ext.getCmp('MakeItSo').hide(); //Don't allow committing if subselected
+            if ( Ext.getCmp('globalCheck')) Ext.getCmp('globalCheck').hide();
             var filterObj = Rally.data.wsapi.Filter.fromQueryString(queryString);
             filterObj.itemId = filterObj.toString();
             filters.push(filterObj);
@@ -530,17 +541,50 @@ Ext.define('CustomApp', {
                 },
                 load: function(store) {
                     if (app.getSetting('useWSJFOverLoad')) {
-
+                        Ext.getCmp('headerBox').setLoading('Updating WSJF...'); 
                         var records = store.getRecords();
-                        _.each(records, this._saveWSJF);
+                        var me = this;
+                        _.each(records, function(record) {
+                            var num = me._calcWSJF(record).toFixed(2);
+                            if ( num !== record.get('WSJFScore').toFixed(2)) {
+                                record.set('WSJFScore',num);
+                            }
+                        });
+                        this._storeSync(store);
                     }
                 }
             },
 
-            _saveWSJF: function(record) {
-                var num = 0;
-                var oldVal = record.get('WSJFScore').toFixed(2);
+            _saveRecord: function(record) {
+                var aPromise = Ext.create('Deft.Deferred');
+                record.save( {
+                    success: function(result) {
+                        aPromise.resolve(result);
+                    },
+                    failure: function(error) {
+                        aPromise.reject(error);
+                    }
+                });
+                return aPromise.promise;
+            },
 
+            _storeSync: function (store){
+                var records = store.getModifiedRecords();
+                if (records.length > 0) {
+                    var promises = [];
+                    var me = this;
+                    _.each(store.getRecords(), function(record) {
+                        promises.push (me._saveRecord(record));
+                    });
+                Deft.Promise.all(promises).then({
+                    success: function() { Ext.getCmp('headerBox').setLoading(false);       },
+                    failure: function() { debugger;}
+                });
+                }
+            },
+
+            _calcWSJF: function(record) {
+                var num = 0.0;
                 if (app.getSetting('usePrelim')) {
                     if (record.get('PreliminaryEstimate') && ((peVal = record.get('PreliminaryEstimate').Value) > 0)) {
                         num = (record.get('RROEValue') + record.get('UserBusinessValue') + record.get('TimeCriticality')) / record.get('PreliminaryEstimate').Value;
@@ -548,6 +592,12 @@ Ext.define('CustomApp', {
                 } else {
                     num = (record.get('RROEValue') + record.get('UserBusinessValue') + record.get('TimeCriticality')) / record.get('JobSize');
                 }
+                return num;
+            },
+
+            _saveWSJF: function(record) {
+                var num = this._calcWSJF(record);
+                var oldVal = record.get('WSJFScore').toFixed(2);
 
                 //if the field is 'decimal' you can only have two decimal places....or it doesn't save it!
                 num = num.toFixed(2);
@@ -1043,7 +1093,8 @@ Ext.define('wsjfBulkSetSize', {
 
             Rally.launchApp('CustomApp', {
                 name:"WSJFBoard",
-	            parentRepos:""
+                parentRepos:"",
+                version:"0.1.1"
             });
 
         });
